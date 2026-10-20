@@ -1,0 +1,6 @@
+[submodule "third_party/SED"]
+	path = third_party/SED
+	url = https://github.com/Infini-AI-Lab/SED.git
+[submodule "third_party/membrane"]
+	path = third_party/membrane
+	url = https://github.com/brightjade/membrane.git
