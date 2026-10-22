@@ -20,7 +20,7 @@ Options:
                     filter the copied L2 policies by policy_name (ablations).
   --run-name NAME   output subdirectory (default: the mode).
 
-Four upstream issues are patched in-process (no files in third_party change):
+Five upstream issues are patched in-process (no files in third_party change):
   1. AgentDojo sends `temperature or NOT_GIVEN`, so temperature 0.0 is never
      sent and the provider default is used. We always send --temperature.
   2. sed/organizer.py reads FIREWORKS_MEMORY_MODEL at import time, before
@@ -30,6 +30,11 @@ Four upstream issues are patched in-process (no files in third_party change):
   4. An errored episode (API timeout etc.) is scored security=True and SED
      memorizes the previous episode's stale trajectory as an attack. We clear
      the message capture per episode and skip memory writes on error.
+  5. Judge calls have no retry, so a judge timeout crashes the run. We retry
+     transient API errors (3 attempts).
+
+Re-running the same command resumes: finished episodes are loaded from their
+traces (AgentDojo cache) and SED memory continues from memory/.
 
 Outputs go to results/<label>/<run-name>/ :
   runs/        AgentDojo trace JSON per episode
@@ -218,6 +223,21 @@ def main() -> None:
 
     DefenseAgent.update_attack_memory = guarded_update_attack_memory
 
+    # Upstream judge calls have no retry: one API timeout while judging a successful
+    # attack kills the whole run. Retry transient errors like AgentDojo does for the agent.
+    import openai
+    import tenacity
+    from sed.judge import Judge
+
+    Judge._call = tenacity.retry(
+        wait=tenacity.wait_random_exponential(multiplier=1, max=40),
+        stop=tenacity.stop_after_attempt(3),
+        retry=tenacity.retry_if_exception_type(
+            (openai.APITimeoutError, openai.APIConnectionError, openai.InternalServerError)
+        ),
+        reraise=True,
+    )(Judge._call)
+
     if args.mode in ("baseline", "frozen"):
         from sed.judge import JudgeResult
 
@@ -235,9 +255,10 @@ def main() -> None:
             injections = injection_tasks or list(suite.injection_tasks)
             pairs = [(u, i) for u in users for i in injections]
             random.Random(args.order_seed).shuffle(pairs)
+            (out_dir / "order.json").write_text(json.dumps([list(p) for p in pairs], indent=1))
             results = {"utility_results": {}, "security_results": {}, "injected_policy_counts": {}}
+            order.extend(pairs)
             for u, i in pairs:
-                order.append((u, i))
                 utility, security, counts = rs._run_task_with_injection_tasks(
                     suite, agent_pipeline, sed_injector, capture, judge, suite.get_user_task_by_id(u),
                     attack, logdir, force_rerun, [i], benchmark_version,
