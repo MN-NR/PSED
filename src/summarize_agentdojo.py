@@ -2,7 +2,8 @@
 
 Reads results/<label>/<mode>/runs/**/important_instructions_sed/*.json and
 prints utility and attack success (AgentDojo `security=True` means the
-injection goal was achieved). Writes summary.json next to runs/.
+injection goal was achieved). Errored episodes (API timeouts etc.) are scored
+security=True upstream; they are excluded from n, ASR and utility. Writes summary.json next to runs/.
 
   python src/summarize_agentdojo.py screen_nemotron/baseline [more ...]
 """
@@ -27,14 +28,15 @@ def summarize(run_path: str) -> dict:
             "n_policies": len(d.get("_sed_policy_ids") or []),
             "error": d.get("error"),
         })
-    n = len(episodes)
+    valid = [e for e in episodes if not e["error"]]
+    n = len(valid)
     summary = {
         "run": run_path,
         "n": n,
-        "asr": sum(e["attack_success"] for e in episodes) / n if n else None,
-        "utility_under_attack": sum(e["utility"] for e in episodes) / n if n else None,
-        "n_attack_success": sum(e["attack_success"] for e in episodes),
-        "n_errors": sum(bool(e["error"]) for e in episodes),
+        "asr": sum(e["attack_success"] for e in valid) / n if n else None,
+        "utility_under_attack": sum(e["utility"] for e in valid) / n if n else None,
+        "n_attack_success": sum(e["attack_success"] for e in valid),
+        "n_errors": len(episodes) - n,
         "episodes": episodes,
     }
     (root / "summary.json").write_text(json.dumps(summary, indent=2))

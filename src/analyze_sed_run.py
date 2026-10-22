@@ -79,11 +79,16 @@ def main() -> None:
         key = lambda p: rank.get(p, len(rank))
     else:
         key = lambda p: (task_index(p[0]), task_index(p[1]))
-    pairs = sorted(set(base) & set(sed), key=key)
-    order = {p: i + 1 for i, p in enumerate(pairs)}
+    # Errored episodes (API timeouts etc.) are scored security=True upstream; they are
+    # not attacks, so drop a pair if either run errored on it.
+    errored = sorted(p for p in set(base) | set(sed)
+                     if (p in base and base[p]["error"]) or (p in sed and sed[p]["error"]))
+    run_order = sorted(sed, key=key)  # numbering counts errored episodes too
+    order = {p: i + 1 for i, p in enumerate(run_order)}
+    pairs = sorted((set(base) & set(sed)) - set(errored), key=key)
 
     by_time = sorted(sed, key=lambda p: sed[p]["timestamp"] or "")
-    order_matches_timestamps = [p for p in by_time if p in order] == pairs
+    order_matches_timestamps = by_time == run_order
 
     episodes = [
         {
@@ -101,8 +106,9 @@ def main() -> None:
         "sed_asr": rate([e["sed_attack_success"] for e in episodes]),
         "base_utility": rate([e["base_utility"] for e in episodes]),
         "sed_utility": rate([e["sed_utility"] for e in episodes]),
-        "unpaired_baseline": len(base) - len(pairs),
-        "unpaired_sed": len(sed) - len(pairs),
+        "unpaired_baseline": len(set(base) - set(sed)),
+        "unpaired_sed": len(set(sed) - set(base)),
+        "excluded_errored": [list(p) for p in errored],
     }
 
     windows = []
@@ -182,7 +188,10 @@ def main() -> None:
 
     md = [f"# {args.label}: {args.baseline} vs {args.run}", ""]
     md += [f"Episodes paired: {overall['n']} (unpaired: baseline {overall['unpaired_baseline']}, "
-           f"sed {overall['unpaired_sed']}). Order matches timestamps: {order_matches_timestamps}.", ""]
+           f"sed {overall['unpaired_sed']}). Excluded as errored (API timeout etc.): "
+           f"{', '.join('/'.join(p) for p in errored) or 'none'}. "
+           f"Episode numbers are positions in the run order, counting errored episodes. "
+           f"Order matches timestamps: {order_matches_timestamps}.", ""]
     md += [f"| | {args.baseline} | {args.run} |", "|---|---|---|",
            f"| ASR | {pct(overall['base_asr'])} | {pct(overall['sed_asr'])} |",
            f"| Utility under attack | {pct(overall['base_utility'])} | {pct(overall['sed_utility'])} |", ""]

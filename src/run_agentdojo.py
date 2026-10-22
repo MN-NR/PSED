@@ -20,13 +20,16 @@ Options:
                     filter the copied L2 policies by policy_name (ablations).
   --run-name NAME   output subdirectory (default: the mode).
 
-Three upstream issues are patched in-process (no files in third_party change):
+Four upstream issues are patched in-process (no files in third_party change):
   1. AgentDojo sends `temperature or NOT_GIVEN`, so temperature 0.0 is never
      sent and the provider default is used. We always send --temperature.
   2. sed/organizer.py reads FIREWORKS_MEMORY_MODEL at import time, before
      run_sed.py loads .env. We load .env before importing anything from SED.
   3. Empty tool outputs are encoded as an empty text block, which Fireworks'
      gpt-oss rejects (400). We send them as "".
+  4. An errored episode (API timeout etc.) is scored security=True and SED
+     memorizes the previous episode's stale trajectory as an attack. We clear
+     the message capture per episode and skip memory writes on error.
 
 Outputs go to results/<label>/<run-name>/ :
   runs/        AgentDojo trace JSON per episode
@@ -181,8 +184,41 @@ def main() -> None:
     rs.USER_TASKS = csv_or_none(args.user_tasks)
     rs.INJECTION_TASKS = csv_or_none(args.injection_tasks)
 
+    # Upstream harness bug: when an episode raises (e.g. API timeout), run_sed records
+    # security=True, and MessageCapture still holds the *previous* episode's messages,
+    # so SED judges and memorizes a stale trajectory as a successful attack. We clear
+    # the capture before every episode and skip memory writes for errored episodes.
+    # The trace still records the error; analysis excludes errored episodes.
+    from agentdojo.task_suite.task_suite import TaskSuite
+    from sed.agent import DefenseAgent
+
+    episode_state = {"errored": False}
+    run_task_with_pipeline = TaskSuite.run_task_with_pipeline
+
+    def guarded_run_task_with_pipeline(self, agent_pipeline, *a, **k):
+        episode_state["errored"] = False
+        for element in getattr(agent_pipeline, "elements", []):
+            if isinstance(element, rs.MessageCapture):
+                element.messages = []
+        try:
+            return run_task_with_pipeline(self, agent_pipeline, *a, **k)
+        except Exception:
+            episode_state["errored"] = True
+            raise
+
+    TaskSuite.run_task_with_pipeline = guarded_run_task_with_pipeline
+
+    update_attack_memory = DefenseAgent.update_attack_memory
+
+    def guarded_update_attack_memory(self, *a, **k):
+        if episode_state["errored"]:
+            print("[PSED] episode errored; not writing SED memory", flush=True)
+            return None
+        return update_attack_memory(self, *a, **k)
+
+    DefenseAgent.update_attack_memory = guarded_update_attack_memory
+
     if args.mode in ("baseline", "frozen"):
-        from sed.agent import DefenseAgent
         from sed.judge import JudgeResult
 
         DefenseAgent.update_attack_memory = lambda self, *a, **k: None
