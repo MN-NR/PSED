@@ -39,7 +39,8 @@ done
 
 echo "==> $(wc -l < "${JOBS}" | tr -d ' ') frozen runs, ${PARALLEL} in parallel"
 mkdir -p logs
+# NUL-separated commands: macOS `xargs -I` caps each command at 255 bytes.
 while read -r name rest; do
-  echo "${PY} src/run_agentdojo.py --mode frozen --label slack_nemotron --model ${MODEL} --run-name ${name} ${rest} > logs/slack_nemotron_${name}.log 2>&1 && echo done ${name} || echo FAILED ${name}"
-done < "${JOBS}" | xargs -P "${PARALLEL}" -I{} bash -c "{}"
+  printf '%s\0' "${PY} src/run_agentdojo.py --mode frozen --label slack_nemotron --model ${MODEL} --run-name ${name} ${rest} > logs/slack_nemotron_${name}.log 2>&1 && echo done ${name} || echo FAILED ${name}"
+done < "${JOBS}" | xargs -0 -n 1 -P "${PARALLEL}" bash -c
 rm -f "${JOBS}"
