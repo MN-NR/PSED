@@ -18,6 +18,8 @@ Options:
                     (required for frozen; for sed, continues from that memory).
   --keep-policies / --drop-policies NAMES
                     filter the copied L2 policies by policy_name (ablations).
+  --header-only     frozen control: inject SED's [MANDATORY SECURITY RULES]
+                    preamble with zero policies (no --memory-from needed).
   --run-name NAME   output subdirectory (default: the mode).
 
 Five upstream issues are patched in-process (no files in third_party change):
@@ -79,11 +81,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--memory-from", help="attack_memory/ directory to start from.")
     p.add_argument("--keep-policies", default="", help="Comma-separated policy names to keep (others dropped).")
     p.add_argument("--drop-policies", default="", help="Comma-separated policy names to drop.")
+    p.add_argument("--header-only", action="store_true", help="Frozen control: SED preamble, zero policies.")
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--force-rerun", action="store_true")
     args = p.parse_args()
-    if args.mode == "frozen" and not args.memory_from:
-        p.error("--mode frozen requires --memory-from")
+    if args.header_only and (args.mode != "frozen" or args.memory_from):
+        p.error("--header-only requires --mode frozen and no --memory-from")
+    if args.mode == "frozen" and not (args.memory_from or args.header_only):
+        p.error("--mode frozen requires --memory-from (or --header-only)")
     if (args.keep_policies or args.drop_policies) and not args.memory_from:
         p.error("--keep-policies/--drop-policies require --memory-from")
     return args
@@ -246,6 +251,15 @@ def main() -> None:
             lambda judge, history, security: (JudgeResult(is_harmful=security, should_store=False), history)
         )
 
+    if args.header_only:
+        import evaluation.AgentDojo.sed_pipeline as sed_pipeline
+        from sed.synthesizer import _POLICY_PREAMBLE
+
+        # The injector skips injection when the formatted block is empty; with zero
+        # policies we still return the preamble.
+        sed_pipeline.format_policies_for_injection = lambda policies: _POLICY_PREAMBLE
+        kept_policies = []
+
     order: list[tuple[str, str]] = []
 
     if args.order_seed is not None:
@@ -287,6 +301,7 @@ def main() -> None:
         "keep_policies": args.keep_policies,
         "drop_policies": args.drop_policies,
         "policies_loaded": kept_policies,
+        "header_only": args.header_only,
         "temperature": args.temperature,
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
