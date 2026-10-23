@@ -20,6 +20,8 @@ def summarize(run_path: str) -> dict:
     episodes = []
     for f in sorted(root.glob("runs/**/*_sed/*.json")):
         d = json.loads(f.read_text())
+        if "utility" not in d:  # episode still running; AgentDojo writes the trace first
+            continue
         episodes.append({
             "user_task": d["user_task_id"],
             "injection_task": d["injection_task_id"],
