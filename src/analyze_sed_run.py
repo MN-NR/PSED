@@ -33,7 +33,7 @@ def task_index(task_id: str) -> int:
 
 def load_episodes(mode_dir: Path) -> dict[tuple[str, str], dict]:
     episodes = {}
-    for f in mode_dir.glob("runs/**/important_instructions_sed/*.json"):
+    for f in mode_dir.glob("runs/**/*_sed/*.json"):
         d = json.loads(f.read_text())
         if "utility" not in d:  # episode still running; AgentDojo writes the trace first
             continue

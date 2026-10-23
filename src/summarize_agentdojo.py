@@ -1,6 +1,6 @@
 """Summarize AgentDojo runs written by run_agentdojo.py.
 
-Reads results/<label>/<mode>/runs/**/important_instructions_sed/*.json and
+Reads results/<label>/<mode>/runs/**/*_sed/*.json and
 prints utility and attack success (AgentDojo `security=True` means the
 injection goal was achieved). Errored episodes (API timeouts etc.) are scored
 security=True upstream; they are excluded from n, ASR and utility. Writes summary.json next to runs/.
@@ -18,7 +18,7 @@ PSED_ROOT = Path(__file__).resolve().parents[1]
 def summarize(run_path: str) -> dict:
     root = PSED_ROOT / "results" / run_path
     episodes = []
-    for f in sorted(root.glob("runs/**/important_instructions_sed/*.json")):
+    for f in sorted(root.glob("runs/**/*_sed/*.json")):
         d = json.loads(f.read_text())
         episodes.append({
             "user_task": d["user_task_id"],

@@ -75,6 +75,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--run-name", help="Output subdirectory under results/<label>/ (default: the mode).")
     p.add_argument("--model", required=True, help="Agent model (judge/memory models come from SED .env).")
     p.add_argument("--suite", default="slack")
+    p.add_argument("--attack", default="important_instructions", help="AgentDojo attack name.")
     p.add_argument("--user-tasks", default="all", help="Comma-separated ids, or 'all'.")
     p.add_argument("--injection-tasks", default="all", help="Comma-separated ids, or 'all'.")
     p.add_argument("--order-seed", type=int, help="Shuffle episode order with this seed.")
@@ -188,6 +189,8 @@ def main() -> None:
 
     # run_sed reads these as module globals inside main().
     rs.CHAT_MODEL = args.model
+    rs.ATTACK_NAME = args.attack
+    rs.SED_ATTACK_NAME = f"{args.attack}_sed"
     rs.PIPELINE_NAME = args.label
     rs.RUNS_DIR = runs_dir
     rs.SED_MEMORY_DIR = memory_dir
