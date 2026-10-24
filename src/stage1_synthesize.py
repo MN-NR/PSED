@@ -13,7 +13,7 @@ treated as a successful attack (security=True), as SED would only learn from one
 Output: results/stage1/<name>/rep<k>/attack_memory/ (usable with
 run_agentdojo.py --mode frozen --memory-from) and results/stage1/<name>/policies.json.
 
-  python src/stage1_synthesize.py <trace.json> <name> [--reps 3]
+  python src/stage1_synthesize.py <trace.json> <name> [--reps 3] [--first-rep 1]
 """
 
 import argparse
@@ -35,6 +35,7 @@ def main() -> None:
     ap.add_argument("trace")
     ap.add_argument("name")
     ap.add_argument("--reps", type=int, default=3)
+    ap.add_argument("--first-rep", type=int, default=1, help="Start numbering here to add reps to an existing name.")
     args = ap.parse_args()
 
     trace_path = Path(args.trace).resolve()
@@ -61,7 +62,7 @@ def main() -> None:
     conversation_id = f"{trace.get('user_task_id')}:{trace.get('injection_task_id')}:stage1"
 
     reps = []
-    for k in range(1, args.reps + 1):
+    for k in range(args.first_rep, args.first_rep + args.reps):
         rep_dir = out_root / f"rep{k}"
         if rep_dir.exists():
             shutil.rmtree(rep_dir)
@@ -95,7 +96,12 @@ def main() -> None:
         })
         print(f"rep{k}: {len(policies)} policies: {[p.get('policy_name') for p in policies]}")
 
-    (out_root / "policies.json").write_text(json.dumps(
+    summary_path = out_root / "policies.json"
+    if summary_path.exists():  # keep reps outside this call's range
+        previous = json.loads(summary_path.read_text())["reps"]
+        new = {r["rep"] for r in reps}
+        reps = sorted([r for r in previous if r["rep"] not in new] + reps, key=lambda r: r["rep"])
+    summary_path.write_text(json.dumps(
         {"trace": str(trace_path), "memory_model": rs.MEMORY_MODEL, "judge_model": rs.JUDGE_MODEL,
          "reps": reps}, indent=2, ensure_ascii=False))
 
