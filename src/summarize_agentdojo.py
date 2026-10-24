@@ -30,6 +30,19 @@ def summarize(run_path: str) -> dict:
             "n_policies": len(d.get("_sed_policy_ids") or []),
             "error": d.get("error"),
         })
+    # --no-attack runs: one trace per user task under <user_task>/none/none.json
+    for f in sorted(root.glob("runs/**/user_task_*/none/none.json")):
+        d = json.loads(f.read_text())
+        if "utility" not in d:
+            continue
+        episodes.append({
+            "user_task": d["user_task_id"],
+            "injection_task": None,
+            "utility": bool(d["utility"]),
+            "attack_success": False,
+            "n_policies": len(d.get("_sed_policy_ids") or []),
+            "error": d.get("error"),
+        })
     valid = [e for e in episodes if not e["error"]]
     n = len(valid)
     summary = {

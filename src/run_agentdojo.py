@@ -18,6 +18,8 @@ Options:
                     (required for frozen; for sed, continues from that memory).
   --keep-policies / --drop-policies NAMES
                     filter the copied L2 policies by policy_name (ablations).
+  --no-attack       benign utility: run each user task once with no injection
+                    (baseline or frozen only). Traces: runs/**/<user_task>/none/none.json.
   --header-only     frozen control: inject SED's [MANDATORY SECURITY RULES]
                     preamble with zero policies (no --memory-from needed).
   --run-name NAME   output subdirectory (default: the mode).
@@ -82,10 +84,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--memory-from", help="attack_memory/ directory to start from.")
     p.add_argument("--keep-policies", default="", help="Comma-separated policy names to keep (others dropped).")
     p.add_argument("--drop-policies", default="", help="Comma-separated policy names to drop.")
+    p.add_argument("--no-attack", action="store_true", help="Benign utility: user tasks without injections.")
     p.add_argument("--header-only", action="store_true", help="Frozen control: SED preamble, zero policies.")
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--force-rerun", action="store_true")
     args = p.parse_args()
+    if args.no_attack and (args.mode == "sed" or args.order_seed is not None):
+        p.error("--no-attack works with --mode baseline or frozen, without --order-seed")
     if args.header_only and (args.mode != "frozen" or args.memory_from):
         p.error("--header-only requires --mode frozen and no --memory-from")
     if args.mode == "frozen" and not (args.memory_from or args.header_only):
@@ -265,6 +270,22 @@ def main() -> None:
 
     order: list[tuple[str, str]] = []
 
+    if args.no_attack:
+        def benchmark_benign(agent_pipeline, suite, attack, sed_injector, capture, judge, logdir,
+                             force_rerun, user_tasks=None, injection_tasks=None, benchmark_version=None):
+            users = user_tasks or list(suite.user_tasks)
+            order.extend((u, "none") for u in users)
+            results = {"utility_results": {}}
+            for u in users:
+                utility, _ = rs._run_task_without_injection_tasks(
+                    suite, agent_pipeline, sed_injector, suite.get_user_task_by_id(u),
+                    logdir, force_rerun, benchmark_version,
+                )
+                results["utility_results"][u] = utility
+            return results
+
+        rs.benchmark_suite_with_sed_injections = benchmark_benign
+
     if args.order_seed is not None:
         def benchmark_shuffled(agent_pipeline, suite, attack, sed_injector, capture, judge, logdir,
                                force_rerun, user_tasks=None, injection_tasks=None, benchmark_version=None):
@@ -305,6 +326,7 @@ def main() -> None:
         "drop_policies": args.drop_policies,
         "policies_loaded": kept_policies,
         "header_only": args.header_only,
+        "no_attack": args.no_attack,
         "temperature": args.temperature,
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
