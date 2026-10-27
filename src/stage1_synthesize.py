@@ -40,6 +40,17 @@ def main() -> None:
 
     trace_path = Path(args.trace).resolve()
     trace = json.loads(trace_path.read_text())
+    # Two input forms:
+    #  - single AgentDojo trace {messages:[...]}  -> one harmful episode (security=True), as the clean arm
+    #  - multi-episode {episodes:[{messages, user_task_id, injection_task_id, security}]} -> replayed in
+    #    order through one shared memory, each via SED's real update_attack_memory with its own security
+    #    flag. Benign (security=False) episodes are written to L1 but, by SED's design, never reach the
+    #    failure buffer or synthesis -- that is the mechanism the C condition probes.
+    if "episodes" in trace:
+        episodes = trace["episodes"]
+    else:
+        episodes = [{"messages": trace["messages"], "user_task_id": trace.get("user_task_id"),
+                     "injection_task_id": trace.get("injection_task_id"), "security": True}]
     out_root = PSED_ROOT / "results" / "stage1" / args.name
 
     # Same import order as run_agentdojo.py: .env before SED (organizer binds its model at import).
@@ -58,9 +69,6 @@ def main() -> None:
     api_key = os.environ["FIREWORKS_API_KEY"]
     client = openai.OpenAI(base_url="https://api.fireworks.ai/inference/v1", api_key=api_key,
                            timeout=rs.REQUEST_TIMEOUT_SECONDS)
-    history = rs.agentdojo_messages_to_history(trace["messages"])
-    conversation_id = f"{trace.get('user_task_id')}:{trace.get('injection_task_id')}:stage1"
-
     reps = []
     for k in range(args.first_rep, args.first_rep + args.reps):
         rep_dir = out_root / f"rep{k}"
@@ -80,20 +88,26 @@ def main() -> None:
             system_prompt=DEFENSE_BASE_PROMPT,
         )
         judge = Judge(llm_client=client, judge_model=rs.JUDGE_MODEL)
-        judge_result, enriched = rs.judge_metadata_with_agentdojo_security_label(judge, history, True)
-        agent.update_attack_memory(
-            conversation_id=conversation_id,
-            conversation_history=enriched,
-            judge_result=judge_result,
-            full_conversation=enriched,
-        )
+        judged = []
+        for n, ep in enumerate(episodes):
+            history = rs.agentdojo_messages_to_history(ep["messages"])
+            security = bool(ep.get("security", True))
+            conversation_id = f"{ep.get('user_task_id')}:{ep.get('injection_task_id')}:stage1:ep{n}"
+            judge_result, enriched = rs.judge_metadata_with_agentdojo_security_label(judge, history, security)
+            agent.update_attack_memory(
+                conversation_id=conversation_id,
+                conversation_history=enriched,
+                judge_result=judge_result,
+                full_conversation=enriched,
+            )
+            judged.append({
+                "episode": n, "security": security,
+                "verdict": {f: getattr(judge_result, f) for f in
+                            ("is_harmful", "should_store", "failure_mode", "harm_description",
+                             "evidence_source", "evidence_excerpt", "complied_action")},
+            })
         policies = [e["metadata"] for e in agent.l2_store.get_all()]
-        reps.append({
-            "rep": k,
-            "judge": {f: getattr(judge_result, f) for f in
-                      ("failure_mode", "harm_description", "evidence_excerpt", "complied_action")},
-            "policies": policies,
-        })
+        reps.append({"rep": k, "judged": judged, "policies": policies})
         print(f"rep{k}: {len(policies)} policies: {[p.get('policy_name') for p in policies]}")
 
     summary_path = out_root / "policies.json"
