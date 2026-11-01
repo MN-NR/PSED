@@ -190,8 +190,30 @@ def main():
             print(f"\n[probe] GOAL verbatim in all templates for {sname}/{inj0}: OK")
         return
 
+    out = PSED_ROOT / "results" / "susceptibility" / "strong_injection.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    def dump(results):
+        out.write_text(json.dumps(
+            {"attack_baseline": rs.ATTACK_NAME, "version": rs.BENCHMARK_VERSION,
+             "templates": list(all_templates), "suite_tasks": SUITE_TASKS, "models": models,
+             "results": results}, indent=2, ensure_ascii=False))
+
+    # resume: keep any models already present in a prior partial JSON (incremental save)
     results = {}  # model -> suite -> inj -> template -> {landed,n,asr,landed_once,carriers}
+    if out.exists():
+        try:
+            prior = json.loads(out.read_text()).get("results", {})
+            results = {m: v for m, v in prior.items() if m in models}
+            if results:
+                print(f"[resume] keeping {sorted(results)} from prior partial JSON", flush=True)
+        except Exception:  # noqa: BLE001
+            results = {}
+
     for mname, mid in models.items():
+        if mname in results:  # already fully done in a prior run
+            print(f"[skip] {mname} already complete", flush=True)
+            continue
         pipeline = build_vanilla_pipeline(openai, rs, mid)
         results[mname] = {}
         for sname in suites_to_run:
@@ -212,7 +234,7 @@ def main():
                         ut = suite.get_user_task_by_id(utid)
                         try:
                             injections = atk.attack(ut, it)
-                            _util, sec = suite.run_task_with_pipeline(pipeline, ut, it, injections)
+                            _util, sec = run_with_retry(suite, pipeline, ut, it, injections)
                             cell["n"] += 1
                             cell["landed"] += int(bool(sec))
                             cell["carriers"][utid] = bool(sec)
@@ -229,13 +251,10 @@ def main():
                           f"ASR {cell['landed']}/{cell['n']} = {cell['asr']}"
                           f"  landed_once={cell['landed_once']}{flag}", flush=True)
             print(flush=True)
+        dump(results)  # incremental: persist after each model completes
+        print(f"[saved] {mname} written to {out}", flush=True)
 
-    out = PSED_ROOT / "results" / "susceptibility" / "strong_injection.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(
-        {"attack_baseline": rs.ATTACK_NAME, "version": rs.BENCHMARK_VERSION,
-         "templates": list(all_templates), "suite_tasks": SUITE_TASKS, "models": models,
-         "results": results}, indent=2, ensure_ascii=False))
+    dump(results)
     print(f"wrote {out}")
 
 
@@ -243,6 +262,25 @@ def _mk_pipe():
     class _AttackPipeline:
         name = "local"
     return _AttackPipeline()
+
+
+def run_with_retry(suite, pipeline, ut, it, injections, tries=3):
+    """Run one task; retry transient Fireworks timeouts/connection errors a few times before
+    giving up (GLM's longer reasoning on the structured prompts occasionally exceeds the timeout).
+    Non-timeout errors are raised immediately."""
+    import time as _t
+    last = None
+    for attempt in range(tries):
+        try:
+            return suite.run_task_with_pipeline(pipeline, ut, it, injections)
+        except Exception as e:  # noqa: BLE001
+            name = type(e).__name__
+            if "Timeout" not in name and "Connection" not in name and "APIError" not in name:
+                raise
+            last = e
+            if attempt < tries - 1:
+                _t.sleep(3 * (attempt + 1))
+    raise last
 
 
 if __name__ == "__main__":
