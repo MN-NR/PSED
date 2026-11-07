@@ -119,7 +119,7 @@ def gate_narrowing_stats(gate_dir="gate"):
                 narrowed += 1
             elif "kept_narrowest" in s:
                 kept_broad += 1
-            elif s == "clean":
+            elif s in ("clean", "born_clean"):  # post-hoc 'clean' / synthesis-time 'born_clean'
                 clean += 1
     print(f"\n{'='*70}\nGATE NARROWING (over first {len(reps)} fired reps):")
     print(f"  rules left clean (already narrow): {clean}")
@@ -131,12 +131,19 @@ def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--family", choices=["nemotron", "gptoss"], default="nemotron")
+    ap.add_argument("--with-sgate", action="store_true",
+                    help="also report the synthesis-time gate (v2) arm (notes/27_synthesis_gate.md)")
+    ap.add_argument("--n", type=int, default=None, help="cap arms at first N fired reps (pilot: 3)")
     args = ap.parse_args()
+    if args.n:
+        globals()["NFIRED"] = args.n
     if args.family == "nemotron":
         base_t, memb_t, gate_t, ref_t, memb_pol = "base", "memb", "gate", "ref_nomem", "fw16"
+        sgate_t, sgate_dir = "sgate", "SG4"
         host = "Fireworks Nemotron"
     else:
         base_t, memb_t, gate_t, ref_t, memb_pol = "gos_base", "gos_memb", "gos_gate", "gos_ref_nomem", "gos_memb"
+        sgate_t, sgate_dir = "gos_sgate", "gos_SG4"
         host = "Fireworks gpt-oss-120b"
 
     print(f"HOST: {host}")
@@ -147,12 +154,18 @@ def main():
     base = arm_report("BASELINE SED (no fix)", base_t, base_t)
     memb = arm_report("MEMBRANE 1-counterexample (same batch)", memb_t, memb_t,
                       policies_path=PSED / "results" / "stage2c" / memb_pol / "policies.json")
-    gate = arm_report("BROADNESS-CHECK GATE", gate_t, gate_t)
+    gate = arm_report("BROADNESS-CHECK GATE (post-hoc)", gate_t, gate_t)
     gate_narrowing_stats(gate_t)
 
+    arms = [("baseline (no fix)", base), ("Membrane 1-counterexample", memb),
+            ("broadness-check gate (post-hoc)", gate)]
+    if args.with_sgate:
+        sgate = arm_report("SYNTHESIS-TIME GATE (v2)", sgate_t, sgate_dir)
+        gate_narrowing_stats(sgate_dir)
+        arms.append(("synthesis-time gate (v2)", sgate))
+
     print(f"\n{'='*70}\nSUMMARY (legit solve rate, all same host; base/memb/gate same-batch design):")
-    for nm, s in (("baseline (no fix)", base), ("Membrane 1-counterexample", memb),
-                  ("broadness-check gate", gate)):
+    for nm, s in arms:
         k, n = s["legit"]
         lo, hi = wilson(k, n)
         print(f"  {nm:26s} {k}/{n} = {round(100*k/n,1)}%  [{lo},{hi}]  reps-below-floor {s['below']}/{len(s['reps'])}  "
