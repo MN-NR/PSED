@@ -36,6 +36,12 @@ MODELS = {
     "minimax-m3":    "accounts/fireworks/models/minimax-m3",              # MiniMax family
     "ember-1":       "accounts/fireworks/models/ember-1",                 # unknown family (probe)
     "inkling":       "accounts/fireworks/models/inkling",                 # unknown family (probe)
+    # new distinct-family candidates for a THIRD agent (notes/27)
+    "kimi-k3":       "accounts/fireworks/models/kimi-k3",                 # Moonshot family
+    "kimi-k3p1-pro": "accounts/fireworks/models/kimi-k3p1-pro",          # Moonshot family (pro)
+    "glm-5p3":       "accounts/fireworks/models/glm-5p3",                 # GLM/Zhipu (newer than screened)
+    "muse-spark":    "accounts/fireworks/models/muse-spark-open",         # unknown family (probe)
+    "rune":          "accounts/fireworks/models/rune",                    # unknown family (probe)
     "Nemotron-ref":  "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b",  # calibration ref
 }
 

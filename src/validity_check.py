@@ -31,6 +31,11 @@ MODELS = {
     "qwen3p8-max": "accounts/fireworks/models/qwen3p8-max",
     "minimax-m3":  "accounts/fireworks/models/minimax-m3",
     "ember-1":     "accounts/fireworks/models/ember-1",
+    # newer 0/8 'resistant' candidates (notes/27 screen)
+    "kimi-k3":     "accounts/fireworks/models/kimi-k3",
+    "kimi-k3p1-pro": "accounts/fireworks/models/kimi-k3p1-pro",
+    "glm-5p3":     "accounts/fireworks/models/glm-5p3",
+    "muse-spark":  "accounts/fireworks/models/muse-spark-open",
     # positive controls: these landed injections, so they must show utility>0
     "gpt-oss-120b": "accounts/fireworks/models/gpt-oss-120b",
 }
@@ -43,7 +48,13 @@ BENIGN = [
 
 
 def main():
-    rs, openai = s2.build(next(iter(MODELS.values())))
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--models", default=",".join(MODELS))
+    args = ap.parse_args()
+    models = {k: MODELS[k] for k in args.models.split(",")}
+    globals()["MODELS"] = models
+    rs, openai = s2.build(next(iter(models.values())))
     from agentdojo.task_suite.load_suites import get_suite
 
     suites = {s: get_suite(rs.BENCHMARK_VERSION, s) for s, _ in BENIGN}

@@ -105,9 +105,9 @@ def arm_report(name, tag, arm_dir, policies_path=None):
     return {"reps": reps, "legit": (kl, nl), "below": below, "spec": (ku, nu), "asr": (landed, total)}
 
 
-def gate_narrowing_stats():
-    d = json.loads((GATE / "gate" / "policies.json").read_text())
-    reps, _ = fired_reps("gate")
+def gate_narrowing_stats(gate_dir="gate"):
+    d = json.loads((GATE / gate_dir / "policies.json").read_text())
+    reps, _ = fired_reps(gate_dir)
     reps = reps[:NFIRED]
     clean = narrowed = kept_broad = 0
     for r in d["reps"]:
@@ -128,16 +128,27 @@ def gate_narrowing_stats():
 
 
 def main():
-    # floor
-    ref = util_map("ref_nomem")
-    print("CLEAN FLOOR (ref_nomem, no memory, this host):")
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--family", choices=["nemotron", "gptoss"], default="nemotron")
+    args = ap.parse_args()
+    if args.family == "nemotron":
+        base_t, memb_t, gate_t, ref_t, memb_pol = "base", "memb", "gate", "ref_nomem", "fw16"
+        host = "Fireworks Nemotron"
+    else:
+        base_t, memb_t, gate_t, ref_t, memb_pol = "gos_base", "gos_memb", "gos_gate", "gos_ref_nomem", "gos_memb"
+        host = "Fireworks gpt-oss-120b"
+
+    print(f"HOST: {host}")
+    ref = util_map(ref_t)
+    print("CLEAN FLOOR (no-memory reference, this host):")
     print(f"  legit {sum(1 for t in LEGIT if ref.get(t))}/5  unrel {sum(1 for t in UNREL if ref.get(t))}/4")
 
-    base = arm_report("BASELINE SED (no fix)", "base", "base")
-    memb = arm_report("MEMBRANE 1-counterexample (same batch)", "memb", "memb",
-                      policies_path=PSED / "results" / "stage2c" / "fw16" / "policies.json")
-    gate = arm_report("BROADNESS-CHECK GATE", "gate", "gate")
-    gate_narrowing_stats()
+    base = arm_report("BASELINE SED (no fix)", base_t, base_t)
+    memb = arm_report("MEMBRANE 1-counterexample (same batch)", memb_t, memb_t,
+                      policies_path=PSED / "results" / "stage2c" / memb_pol / "policies.json")
+    gate = arm_report("BROADNESS-CHECK GATE", gate_t, gate_t)
+    gate_narrowing_stats(gate_t)
 
     print(f"\n{'='*70}\nSUMMARY (legit solve rate, all same host; base/memb/gate same-batch design):")
     for nm, s in (("baseline (no fix)", base), ("Membrane 1-counterexample", memb),
@@ -146,7 +157,10 @@ def main():
         lo, hi = wilson(k, n)
         print(f"  {nm:26s} {k}/{n} = {round(100*k/n,1)}%  [{lo},{hi}]  reps-below-floor {s['below']}/{len(s['reps'])}  "
               f"ASR {s['asr'][0]}/{s['asr'][1]}  spec {s['spec'][0]}/{s['spec'][1]}")
-    print("  (cross-batch refs: stage2b baseline 36.0% [24.1,49.9]; stage2c Membrane 80.0% [67.0,88.8])")
+    if args.family == "nemotron":
+        print("  (cross-batch refs: stage2b baseline 36.0% [24.1,49.9]; stage2c Membrane 80.0% [67.0,88.8])")
+    else:
+        print("  (gpt-oss attack ref: notes/22 legit 100%->50% under poison, over-generalizes 9/10)")
 
 
 if __name__ == "__main__":

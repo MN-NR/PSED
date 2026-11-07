@@ -345,6 +345,8 @@ def main():
     ap.add_argument("--reps", type=int, default=10)
     ap.add_argument("--first-rep", type=int, default=1)
     ap.add_argument("--agent", choices=["fireworks", "openrouter"], default="fireworks")
+    ap.add_argument("--agent-model", default=FW_NEMOTRON,
+                    help="Fireworks agent model id (default Nemotron; e.g. .../gpt-oss-120b).")
     ap.add_argument("--gate", choices=["on", "off"], default="on")
     args = ap.parse_args()
 
@@ -355,7 +357,7 @@ def main():
                   {"kind": "injection", "user_task": s2b.CARRIER, "injection_task": s2b.GENUINE_INJECTION}]
 
     or_model = os.environ.get("OPENROUTER_AGENT_MODEL", "nvidia/nemotron-3.5-lightning:free")
-    agent_model = FW_NEMOTRON if args.agent == "fireworks" else or_model
+    agent_model = args.agent_model if args.agent == "fireworks" else or_model
     rs, openai = s2.build(agent_model)
     fw_gate_client = openai.OpenAI(base_url="https://api.fireworks.ai/inference/v1",
                                    api_key=os.environ["FIREWORKS_API_KEY"],
@@ -373,7 +375,7 @@ def main():
             shutil.rmtree(rep_dir)
         if args.agent == "fireworks":
             agent, judge, suite, pipeline, injector, capture, attack = \
-                s2.make_pipeline(rs, openai, FW_NEMOTRON, rep_dir)
+                s2.make_pipeline(rs, openai, agent_model, rep_dir)
         else:
             agent, judge, suite, pipeline, injector, capture, attack, _ = \
                 make_pipeline_openrouter(rs, openai, rep_dir)
