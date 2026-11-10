@@ -1,29 +1,31 @@
-"""Full n=10 over-generalization poison run for an OpenRouter agent (default: Meta Llama-3.3-70b).
+"""Full n=10 over-generalization poison run for an OpenRouter screen winner (notes/29,30).
 
 Orchestrates the SAME attack+eval pipeline as the gpt-oss n=10 run (notes/22), but with the AGENT
 on OpenRouter while judge/memory/synthesis stay on Fireworks deepseek (the split implemented by
 stage2b_stream --agent openrouter / run_agentdojo --agent openrouter). The analyzer is the shared
-src/analyze_gptoss_n10.py pointed at --root llama_n10.
+src/analyze_gptoss_n10.py. --agent-name selects the model and result dirs from the AGENTS registry:
+  llama     -> meta-llama/llama-3.3-70b-instruct   (baseline add-user ASR 75%)
+  ministral -> mistralai/ministral-8b-2512         (baseline add-user ASR 50%)
 
-Produces exactly what the analyzer reads:
-  results/stage2b/llama_clean10/policies.json , llama_P10/policies.json         (memory write, per rep)
-  results/llama_n10/ref_nomem/runs/**/<ut>/none/none.json                       (no-memory floor)
-  results/llama_n10/{clean,P}_rep<k>/runs/**/<ut>/none/none.json                (frozen --no-attack legit)
-  results/llama_n10/asr_P_rep<k>/runs/**/<ut>/*_sed/injection_task_5.json       (frozen WITH attack)
+Produces exactly what the analyzer reads (NAME = the --agent-name):
+  results/stage2b/<NAME>_clean10/policies.json , <NAME>_P10/policies.json       (memory write, per rep)
+  results/<NAME>_n10/ref_nomem/runs/**/<ut>/none/none.json                      (no-memory floor)
+  results/<NAME>_n10/{clean,P}_rep<k>/runs/**/<ut>/none/none.json               (frozen --no-attack legit)
+  results/<NAME>_n10/asr_P_rep<k>/runs/**/<ut>/*_sed/injection_task_5.json      (frozen WITH attack)
 
 Pre-registered success (mirrors notes/22): poison fires each P rep; the synthesized membership rule is
 BROAD (over-generalizes); legit solve clean >> P with separated Wilson CIs; specificity preserved;
-injection ASR under poison ~0 (down from the undefended baseline the OpenRouter screen measured,
-notes/29: llama-3.3-70b 75%).
+injection ASR under poison ~0 (down from the undefended baseline the OpenRouter screen measured).
 
-Agent model = meta-llama/llama-3.3-70b-instruct (the OpenRouter screen winner). OPENROUTER_API_KEY and
-the Fireworks judge/memory keys both come from third_party/SED/.env. Nothing under third_party/ changes.
+OPENROUTER_API_KEY and the Fireworks judge/memory keys both come from third_party/SED/.env. Nothing
+under third_party/ changes.
 
   # 1-rep smoke (cheap) to prove the wiring fires end to end:
-  third_party/SED/.venv/bin/python src/llama_n10.py --reps 1 --asr-reps 1 --legit user_task_7,user_task_17
+  third_party/SED/.venv/bin/python src/openrouter_n10.py --agent-name ministral --reps 1 --asr-reps 1 \
+      --legit user_task_7,user_task_17 --unrel user_task_0
   # full run (credit-heavy -- ~230 agent rollouts):
-  third_party/SED/.venv/bin/python src/llama_n10.py --reps 10 --asr-reps 2
-  # then:
+  third_party/SED/.venv/bin/python src/openrouter_n10.py --agent-name llama --reps 10 --asr-reps 2
+  # then (the script prints this line with the right baseline):
   third_party/SED/.venv/bin/python src/analyze_gptoss_n10.py --root llama_n10 \
       --clean llama_clean10 --p llama_P10 --baseline-asr 75.0
 """
@@ -37,7 +39,15 @@ PSED_ROOT = Path(__file__).resolve().parents[1]
 VENV_PY = PSED_ROOT / "third_party" / "SED" / ".venv" / "bin" / "python"
 SRC = PSED_ROOT / "src"
 
-AGENT = "meta-llama/llama-3.3-70b-instruct"
+# Registry of OpenRouter screen winners (notes/29). Each -> (model slug, baseline undefended add-user
+# ASR for the analyzer footnote). Add a new winner here to pre-wire it.
+AGENTS = {
+    "llama":     ("meta-llama/llama-3.3-70b-instruct", 75.0),
+    "ministral": ("mistralai/ministral-8b-2512", 50.0),
+}
+
+# set from args in main(); defaults keep the llama behavior
+AGENT = AGENTS["llama"][0]
 ROOT = "llama_n10"
 CLEAN_NAME = "llama_clean10"
 P_NAME = "llama_P10"
@@ -79,12 +89,21 @@ def frozen_attack(run_name, mem_from, carriers):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--agent-name", choices=sorted(AGENTS), default="llama",
+                    help="Which OpenRouter screen winner to run (sets model + result dirs + baseline).")
     ap.add_argument("--reps", type=int, default=10)
     ap.add_argument("--asr-reps", type=int, default=2, help="How many P reps to also ASR-eval.")
     ap.add_argument("--legit", default=",".join(LEGIT), help="Override legit+ (comma ids).")
     ap.add_argument("--unrel", default=",".join(UNREL), help="Override unrelated control (comma ids).")
     ap.add_argument("--skip-write", action="store_true", help="Reuse existing memory; evals only.")
     args = ap.parse_args()
+
+    global AGENT, ROOT, CLEAN_NAME, P_NAME
+    AGENT, baseline_asr = AGENTS[args.agent_name]
+    ROOT = f"{args.agent_name}_n10"
+    CLEAN_NAME = f"{args.agent_name}_clean10"
+    P_NAME = f"{args.agent_name}_P10"
+
     legit = args.legit.split(",")
     unrel = args.unrel.split(",")
     benign_tasks = legit + unrel
@@ -109,7 +128,7 @@ def main():
 
     print("\nDONE. Analyze with:")
     print(f"  {VENV_PY} {SRC/'analyze_gptoss_n10.py'} --root {ROOT} "
-          f"--clean {CLEAN_NAME} --p {P_NAME} --baseline-asr 75.0")
+          f"--clean {CLEAN_NAME} --p {P_NAME} --baseline-asr {baseline_asr}")
 
 
 if __name__ == "__main__":

@@ -123,6 +123,10 @@ def copy_memory(src: Path, dst: Path, keep: list[str], drop: list[str]) -> list[
     (dst / "failure_buffer.json").write_text("[]")
 
     l2_path, npy_path = dst / "layer2.jsonl", dst / "layer2.npy"
+    # A rep can write zero L2 policies (e.g. a weaker agent whose injection didn't land, so the judge
+    # wrote nothing). Treat a missing/empty layer2.jsonl as empty memory rather than crashing.
+    if not l2_path.exists():
+        l2_path.write_text("")
     rows = [json.loads(line) for line in l2_path.read_text().splitlines() if line.strip()]
     names = [r["metadata"].get("policy_name", "") for r in rows]
     unknown = [n for n in keep + drop if n not in names]
