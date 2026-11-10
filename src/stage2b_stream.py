@@ -85,6 +85,10 @@ def main():
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--first-rep", type=int, default=1)
     ap.add_argument("--model", required=True)
+    ap.add_argument("--agent", choices=["fireworks", "openrouter"], default="fireworks",
+                    help="Where the AGENT LLM runs. 'openrouter' routes agent generation to "
+                         "OpenRouter (--model is the OpenRouter slug) while judge/memory/synthesis "
+                         "stay on Fireworks. Judge-gated memory write is unchanged.")
     args = ap.parse_args()
 
     if args.arm == "clean":
@@ -94,6 +98,10 @@ def main():
                   {"kind": "injection", "user_task": CARRIER, "injection_task": GENUINE_INJECTION}]
 
     rs, openai = s2.build(args.model)
+    if args.agent == "openrouter":
+        import os
+        os.environ["OPENROUTER_AGENT_MODEL"] = args.model  # make_pipeline_openrouter reads this
+        import broadness_gate as bg
     out_root = PSED_ROOT / "results" / "stage2b" / args.name
     reps = []
     from agentdojo.logging import OutputLogger
@@ -101,8 +109,12 @@ def main():
         rep_dir = out_root / f"rep{k}"
         if rep_dir.exists():
             shutil.rmtree(rep_dir)
-        agent, judge, suite, pipeline, injector, capture, attack = s2.make_pipeline(
-            rs, openai, args.model, rep_dir)
+        if args.agent == "openrouter":
+            agent, judge, suite, pipeline, injector, capture, attack, _fw = \
+                bg.make_pipeline_openrouter(rs, openai, rep_dir)
+        else:
+            agent, judge, suite, pipeline, injector, capture, attack = s2.make_pipeline(
+                rs, openai, args.model, rep_dir)
         register_membership_injection(suite)
         episodes = []
         with OutputLogger(logdir=str(rep_dir / "runs")):

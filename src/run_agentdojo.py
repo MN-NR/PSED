@@ -76,6 +76,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--label", required=True, help="Run label, e.g. screen_nemotron or slack_nemotron.")
     p.add_argument("--run-name", help="Output subdirectory under results/<label>/ (default: the mode).")
     p.add_argument("--model", required=True, help="Agent model (judge/memory models come from SED .env).")
+    p.add_argument("--agent", choices=["fireworks", "openrouter"], default="fireworks",
+                   help="Where the AGENT LLM runs. 'openrouter' routes agent generation to "
+                        "OpenRouter (OPENROUTER_API_KEY in SED .env; --model is the OpenRouter slug) "
+                        "while judge/memory/synthesis stay on Fireworks. Mirrors "
+                        "broadness_gate.make_pipeline_openrouter.")
     p.add_argument("--suite", default="slack")
     p.add_argument("--attack", default="important_instructions", help="AgentDojo attack name.")
     p.add_argument("--user-tasks", default="all", help="Comma-separated ids, or 'all'.")
@@ -194,6 +199,20 @@ def main() -> None:
 
     # run_sed reads these as module globals inside main().
     rs.CHAT_MODEL = args.model
+
+    # Route ONLY the agent LLM to OpenRouter (judge/synthesizer keep run_sed's Fireworks client).
+    # run_sed.main() builds the agent as `OpenAILLM(client, CHAT_MODEL)` from its module global
+    # `rs.OpenAILLM`; we wrap it so that call binds an OpenRouter client instead. The globally
+    # patched chat_completion_request uses whatever client the OpenAILLM holds, so agent calls hit
+    # OpenRouter while Judge/PolicySynthesizer (own Fireworks client) are untouched.
+    if args.agent == "openrouter":
+        import openai as _openai_mod
+        or_client = _openai_mod.OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.environ["OPENROUTER_API_KEY"], timeout=rs.REQUEST_TIMEOUT_SECONDS)
+        _OpenAILLM = rs.OpenAILLM
+        rs.OpenAILLM = lambda _client, model, *a, **k: _OpenAILLM(or_client, model, *a, **k)
+
     rs.ATTACK_NAME = args.attack
     rs.SED_ATTACK_NAME = f"{args.attack}_sed"
     rs.PIPELINE_NAME = args.label
@@ -313,6 +332,7 @@ def main() -> None:
         "label": args.label,
         "run_name": args.run_name or args.mode,
         "agent_model": args.model,
+        "agent_host": args.agent,
         "memory_model": os.environ.get("FIREWORKS_MEMORY_MODEL"),
         "judge_model": os.environ.get("JUDGE_MODEL"),
         "suite": args.suite,
