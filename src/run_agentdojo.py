@@ -186,6 +186,9 @@ def main() -> None:
 
     @retry.wraps
     def chat_completion_request(client, model, messages, tools, reasoning_effort, temperature=0.0):
+        # OpenRouter's free tier 402s when max_tokens (defaulting to the model's full context) exceeds
+        # the affordable ceiling; cap it for OpenRouter calls only (Fireworks left as NOT_GIVEN).
+        max_tokens = 16384 if "openrouter" in str(getattr(client, "base_url", "")) else NOT_GIVEN
         return client.chat.completions.create(
             model=model,
             messages=[normalize(m) for m in messages],
@@ -193,6 +196,7 @@ def main() -> None:
             tool_choice="auto" if tools else NOT_GIVEN,
             temperature=args.temperature,
             reasoning_effort=reasoning_effort or NOT_GIVEN,
+            max_tokens=max_tokens,
         )
 
     openai_llm.chat_completion_request = chat_completion_request
