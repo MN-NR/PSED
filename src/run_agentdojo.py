@@ -59,6 +59,7 @@ import importlib.util
 import json
 import os
 import random
+import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -170,9 +171,16 @@ def main() -> None:
     os.chdir(SED_ROOT)
 
     import agentdojo.agent_pipeline.llms.openai_llm as openai_llm
-    from openai import NOT_GIVEN
+    from openai import NOT_GIVEN, APIStatusError
 
     retry = openai_llm.chat_completion_request.retry  # keep AgentDojo's tenacity policy
+
+    def _afford_from_402(e):
+        # OpenRouter 402 body: "...can only afford <N> tokens...". Return N, or None if not a 402.
+        if getattr(e, "status_code", None) != 402:
+            return None
+        m = re.search(r"can only afford (\d+)", str(e))
+        return int(m.group(1)) if m else None
 
     def normalize(msg):
         # Fireworks' gpt-oss rejects a tool result sent as [{"type": "text", "text": ""}]
@@ -186,18 +194,37 @@ def main() -> None:
 
     @retry.wraps
     def chat_completion_request(client, model, messages, tools, reasoning_effort, temperature=0.0):
-        # OpenRouter's free tier 402s when max_tokens (defaulting to the model's full context) exceeds
-        # the affordable ceiling; cap it for OpenRouter calls only (Fireworks left as NOT_GIVEN).
-        max_tokens = 16384 if "openrouter" in str(getattr(client, "base_url", "")) else NOT_GIVEN
-        return client.chat.completions.create(
-            model=model,
-            messages=[normalize(m) for m in messages],
-            tools=tools or NOT_GIVEN,
-            tool_choice="auto" if tools else NOT_GIVEN,
-            temperature=args.temperature,
-            reasoning_effort=reasoning_effort or NOT_GIVEN,
-            max_tokens=max_tokens,
-        )
+        # OpenRouter's FREE tier caps the affordable max_tokens PER REQUEST, and that ceiling
+        # fluctuates with prompt size and the routed provider's price (seen varying ~6.6k-16.4k
+        # within one call). A fixed cap sometimes loses. So for OpenRouter start at 16384 and, on a
+        # 402, step down to whatever the error says is affordable; agent turns here are short, so a
+        # lower cap never truncates a genuine completion. Fireworks is left as NOT_GIVEN.
+        is_or = "openrouter" in str(getattr(client, "base_url", ""))
+        max_tokens = 16384 if is_or else NOT_GIVEN
+        for _ in range(6):
+            try:
+                completion = client.chat.completions.create(
+                    model=model,
+                    messages=[normalize(m) for m in messages],
+                    tools=tools or NOT_GIVEN,
+                    tool_choice="auto" if tools else NOT_GIVEN,
+                    temperature=args.temperature,
+                    reasoning_effort=reasoning_effort or NOT_GIVEN,
+                    max_tokens=max_tokens,
+                )
+            except APIStatusError as e:
+                afford = _afford_from_402(e) if is_or else None
+                if afford is not None and (new := max(512, afford - 256)) < max_tokens:
+                    max_tokens = new
+                    continue
+                raise
+            # OpenRouter occasionally returns a 200 with choices=None (upstream provider hiccup);
+            # AgentDojo then does completion.choices[0] and crashes the run. Raise so the tenacity
+            # policy above (retry on any non-BadRequest error, 3 attempts) retries the whole call.
+            if not getattr(completion, "choices", None):
+                raise RuntimeError(f"empty completion.choices from {model} (transient); retrying")
+            return completion
+        raise RuntimeError(f"OpenRouter affordability retries exhausted for {model}")
 
     openai_llm.chat_completion_request = chat_completion_request
 
