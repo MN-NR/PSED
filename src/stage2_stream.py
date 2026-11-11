@@ -33,10 +33,8 @@ import argparse
 import importlib.util
 import json
 import os
-import re
 import shutil
 import sys
-import time
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -59,25 +57,9 @@ def build(model: str):
     os.chdir(SED_ROOT)
 
     import agentdojo.agent_pipeline.llms.openai_llm as openai_llm
-    from openai import NOT_GIVEN, APIStatusError
+    from openai import NOT_GIVEN
 
     retry = openai_llm.chat_completion_request.retry
-
-    def _or_402_kind(e):
-        # OpenRouter free-tier 402s: ("afford", N) -> lower max_tokens; ("in_flight", s) -> wait s.
-        if getattr(e, "status_code", None) != 402:
-            return None
-        s = str(e)
-        m = re.search(r"can only afford (\d+)", s)
-        if m:
-            return ("afford", int(m.group(1)))
-        if "in_flight" in s or "in-flight" in s.lower():
-            try:
-                ra = int(e.response.headers.get("Retry-After", "8"))
-            except Exception:  # noqa: BLE001
-                ra = 8
-            return ("in_flight", min(ra, 130))
-        return None
 
     def normalize(msg):
         content = msg.get("content")
@@ -92,37 +74,25 @@ def build(model: str):
         # OpenRouter's free tier rejects a request whose max_tokens (defaulting to the model's full
         # context, e.g. 131072) exceeds the affordable ceiling -> HTTP 402. Agent turns are short, so
         # cap max_tokens for OpenRouter calls only; Fireworks calls are left untouched (NOT_GIVEN).
-        # OpenRouter's free tier caps the $ value of in-flight requests to a small ceiling, so start
-        # SMALL (short agent turns; 4096 never truncates) and reserve little. On an "afford N" 402
-        # step down to fit; on an in-flight-budget 402 wait out the Retry-After. Fireworks: NOT_GIVEN.
+        # OpenRouter's per-request affordability is tighter than Fireworks', so cap max_tokens small
+        # for OpenRouter (short agent turns; 2048 never truncates); Fireworks stays NOT_GIVEN. NOTE: a
+        # free-tier OpenRouter account that never purchased credits hard-402s on paid models once the
+        # small promo allowance is spent -- no cap or retry fixes that; purchase credits.
         is_or = "openrouter" in str(getattr(client, "base_url", ""))
-        max_tokens = 4096 if is_or else NOT_GIVEN
-        for _ in range(8):
-            try:
-                completion = client.chat.completions.create(
-                    model=model_,
-                    messages=[normalize(m) for m in messages],
-                    tools=tools or NOT_GIVEN,
-                    tool_choice="auto" if tools else NOT_GIVEN,
-                    temperature=0.0,
-                    reasoning_effort=reasoning_effort or NOT_GIVEN,
-                    max_tokens=max_tokens,
-                )
-            except APIStatusError as e:
-                kind = _or_402_kind(e) if is_or else None
-                if kind and kind[0] == "afford" and (new := max(512, kind[1] - 256)) < max_tokens:
-                    max_tokens = new
-                    continue
-                if kind and kind[0] == "in_flight":
-                    time.sleep(kind[1])
-                    continue
-                raise
-            # OpenRouter occasionally returns a 200 with choices=None (upstream hiccup); raise so the
-            # tenacity policy retries it rather than crashing on completion.choices[0] downstream.
-            if not getattr(completion, "choices", None):
-                raise RuntimeError(f"empty completion.choices from {model_} (transient); retrying")
-            return completion
-        raise RuntimeError(f"OpenRouter affordability retries exhausted for {model_}")
+        completion = client.chat.completions.create(
+            model=model_,
+            messages=[normalize(m) for m in messages],
+            tools=tools or NOT_GIVEN,
+            tool_choice="auto" if tools else NOT_GIVEN,
+            temperature=0.0,
+            reasoning_effort=reasoning_effort or NOT_GIVEN,
+            max_tokens=2048 if is_or else NOT_GIVEN,
+        )
+        # OpenRouter occasionally returns a 200 with choices=None (upstream hiccup); raise so the
+        # tenacity policy retries it rather than crashing on completion.choices[0] downstream.
+        if not getattr(completion, "choices", None):
+            raise RuntimeError(f"empty completion.choices from {model_} (transient); retrying")
+        return completion
 
     openai_llm.chat_completion_request = chat_completion_request
 
