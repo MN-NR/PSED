@@ -62,6 +62,7 @@ import random
 import re
 import shutil
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -175,12 +176,24 @@ def main() -> None:
 
     retry = openai_llm.chat_completion_request.retry  # keep AgentDojo's tenacity policy
 
-    def _afford_from_402(e):
-        # OpenRouter 402 body: "...can only afford <N> tokens...". Return N, or None if not a 402.
+    def _or_402_kind(e):
+        # OpenRouter free-tier 402s come in two flavors:
+        #   "...can only afford <N> tokens..."  -> ("afford", N): lower max_tokens to fit.
+        #   "...in-flight budget exhausted..."   -> ("in_flight", retry_after_s): wait and retry.
+        # Returns None for anything that is not a recognized 402.
         if getattr(e, "status_code", None) != 402:
             return None
-        m = re.search(r"can only afford (\d+)", str(e))
-        return int(m.group(1)) if m else None
+        s = str(e)
+        m = re.search(r"can only afford (\d+)", s)
+        if m:
+            return ("afford", int(m.group(1)))
+        if "in_flight" in s or "in-flight" in s.lower():
+            try:
+                ra = int(e.response.headers.get("Retry-After", "8"))
+            except Exception:  # noqa: BLE001
+                ra = 8
+            return ("in_flight", min(ra, 130))
+        return None
 
     def normalize(msg):
         # Fireworks' gpt-oss rejects a tool result sent as [{"type": "text", "text": ""}]
@@ -194,14 +207,14 @@ def main() -> None:
 
     @retry.wraps
     def chat_completion_request(client, model, messages, tools, reasoning_effort, temperature=0.0):
-        # OpenRouter's FREE tier caps the affordable max_tokens PER REQUEST, and that ceiling
-        # fluctuates with prompt size and the routed provider's price (seen varying ~6.6k-16.4k
-        # within one call). A fixed cap sometimes loses. So for OpenRouter start at 16384 and, on a
-        # 402, step down to whatever the error says is affordable; agent turns here are short, so a
-        # lower cap never truncates a genuine completion. Fireworks is left as NOT_GIVEN.
+        # OpenRouter's FREE tier caps the total $ value of IN-FLIGHT requests to a small ceiling
+        # (~a few thousand tokens' worth). A big max_tokens reservation alone can exceed it, so start
+        # SMALL (agent turns here are short -- a few hundred output tokens -- so 4096 never truncates
+        # a genuine completion) and reserve little. On a 402 still step down to the affordable amount,
+        # and on an in-flight-budget 402 wait out the Retry-After. Fireworks is left as NOT_GIVEN.
         is_or = "openrouter" in str(getattr(client, "base_url", ""))
-        max_tokens = 16384 if is_or else NOT_GIVEN
-        for _ in range(6):
+        max_tokens = 4096 if is_or else NOT_GIVEN
+        for _ in range(8):
             try:
                 completion = client.chat.completions.create(
                     model=model,
@@ -213,9 +226,12 @@ def main() -> None:
                     max_tokens=max_tokens,
                 )
             except APIStatusError as e:
-                afford = _afford_from_402(e) if is_or else None
-                if afford is not None and (new := max(512, afford - 256)) < max_tokens:
+                kind = _or_402_kind(e) if is_or else None
+                if kind and kind[0] == "afford" and (new := max(512, kind[1] - 256)) < max_tokens:
                     max_tokens = new
+                    continue
+                if kind and kind[0] == "in_flight":
+                    time.sleep(kind[1])
                     continue
                 raise
             # OpenRouter occasionally returns a 200 with choices=None (upstream provider hiccup);

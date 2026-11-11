@@ -36,6 +36,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -62,12 +63,21 @@ def build(model: str):
 
     retry = openai_llm.chat_completion_request.retry
 
-    def _afford_from_402(e):
-        # OpenRouter 402 body: "...can only afford <N> tokens...". Return N, or None if not a 402.
+    def _or_402_kind(e):
+        # OpenRouter free-tier 402s: ("afford", N) -> lower max_tokens; ("in_flight", s) -> wait s.
         if getattr(e, "status_code", None) != 402:
             return None
-        m = re.search(r"can only afford (\d+)", str(e))
-        return int(m.group(1)) if m else None
+        s = str(e)
+        m = re.search(r"can only afford (\d+)", s)
+        if m:
+            return ("afford", int(m.group(1)))
+        if "in_flight" in s or "in-flight" in s.lower():
+            try:
+                ra = int(e.response.headers.get("Retry-After", "8"))
+            except Exception:  # noqa: BLE001
+                ra = 8
+            return ("in_flight", min(ra, 130))
+        return None
 
     def normalize(msg):
         content = msg.get("content")
@@ -82,12 +92,12 @@ def build(model: str):
         # OpenRouter's free tier rejects a request whose max_tokens (defaulting to the model's full
         # context, e.g. 131072) exceeds the affordable ceiling -> HTTP 402. Agent turns are short, so
         # cap max_tokens for OpenRouter calls only; Fireworks calls are left untouched (NOT_GIVEN).
-        # OpenRouter's free tier caps the affordable max_tokens per request, and that ceiling
-        # fluctuates with prompt size / routed provider price; start at 16384 and, on a 402, step
-        # down to whatever the error says is affordable (agent turns are short, so no truncation).
+        # OpenRouter's free tier caps the $ value of in-flight requests to a small ceiling, so start
+        # SMALL (short agent turns; 4096 never truncates) and reserve little. On an "afford N" 402
+        # step down to fit; on an in-flight-budget 402 wait out the Retry-After. Fireworks: NOT_GIVEN.
         is_or = "openrouter" in str(getattr(client, "base_url", ""))
-        max_tokens = 16384 if is_or else NOT_GIVEN
-        for _ in range(6):
+        max_tokens = 4096 if is_or else NOT_GIVEN
+        for _ in range(8):
             try:
                 completion = client.chat.completions.create(
                     model=model_,
@@ -99,9 +109,12 @@ def build(model: str):
                     max_tokens=max_tokens,
                 )
             except APIStatusError as e:
-                afford = _afford_from_402(e) if is_or else None
-                if afford is not None and (new := max(512, afford - 256)) < max_tokens:
+                kind = _or_402_kind(e) if is_or else None
+                if kind and kind[0] == "afford" and (new := max(512, kind[1] - 256)) < max_tokens:
                     max_tokens = new
+                    continue
+                if kind and kind[0] == "in_flight":
+                    time.sleep(kind[1])
                     continue
                 raise
             # OpenRouter occasionally returns a 200 with choices=None (upstream hiccup); raise so the
