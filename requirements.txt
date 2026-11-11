@@ -1,0 +1,11 @@
+# PSED driver dependencies (the src/ experiment code). Pinned to the versions used for the paper.
+# AgentDojo pulls in its own transitive deps; SED/Membrane have their own requirements under
+# third_party/ (install those per their upstream READMEs if you run the defenses directly).
+openai==3.35.1
+agentdojo==0.1.35
+python-dotenv==1.2.4
+tenacity==9.1.4
+numpy==2.5.4
+httpx==0.28.1
+tiktoken==0.14.0
+pydantic==2.14.1

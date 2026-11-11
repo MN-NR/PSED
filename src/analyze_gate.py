@@ -134,6 +134,12 @@ def main():
     ap.add_argument("--with-sgate", action="store_true",
                     help="also report the synthesis-time gate (v2) arm (notes/27_synthesis_gate.md)")
     ap.add_argument("--n", type=int, default=None, help="cap arms at first N fired reps (pilot: 3)")
+    # Optional tag overrides so a re-run batch (e.g. the n=20 single-baseline batch) can be analyzed
+    # without touching the default n=10 tags; stage2h_gate holds base/gate memory, stage2c holds memb.
+    ap.add_argument("--base-tag", default=None, help="eval+memory tag for the no-fix baseline arm")
+    ap.add_argument("--gate-tag", default=None, help="eval+memory tag for the broadness-gate arm")
+    ap.add_argument("--memb-tag", default=None, help="eval tag for the Membrane counterexample arm")
+    ap.add_argument("--memb-pol", default=None, help="stage2c memory dir name for the Membrane arm")
     args = ap.parse_args()
     if args.n:
         globals()["NFIRED"] = args.n
@@ -145,6 +151,12 @@ def main():
         base_t, memb_t, gate_t, ref_t, memb_pol = "gos_base", "gos_memb", "gos_gate", "gos_ref_nomem", "gos_memb"
         sgate_t, sgate_dir = "gos_sgate", "gos_SG4"
         host = "Fireworks gpt-oss-120b"
+
+    # apply any tag overrides (used by the n=20 single-baseline re-run)
+    base_t = args.base_tag or base_t
+    gate_t = args.gate_tag or gate_t
+    memb_t = args.memb_tag or memb_t
+    memb_pol = args.memb_pol or memb_pol
 
     print(f"HOST: {host}")
     ref = util_map(ref_t)
