@@ -5,7 +5,11 @@
 .venv-*/
 __pycache__/
 *.pyc
-results/
+# ignore all raw rollout traces, but keep the small policy trees so the
+# paper's tables can be regenerated without re-running ~1000 rollouts
+/results/**
+!/results/**/
+!/results/**/policies.json
 logs/
 .DS_Store
 /notes/
